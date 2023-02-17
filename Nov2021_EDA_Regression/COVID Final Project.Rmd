@@ -1,0 +1,498 @@
+---
+title: "COVID-19 Final Project for 5301"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, error=FALSE)
+```
+
+## Introduction
+
+In this report, we will analyze COVID-19 data for global and in the US.  We will look at three main variables: cases, deaths and vaccine rates. We will look at how the data interacts and connects. 
+
+Let's import important libraries needed for this report.
+```{r important libraries, results="hide"}
+library(tidyverse)
+library(tinytex)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+```
+## Question and Quick Summary
+
+As we all have experienced the COVID-19 (coronavirus) pandemic for over a year, it is important to start to look at possible trends and causes of case and death rates. Although there are many factors which can influence this, we will look at how the US data trends compare to the global trends. Then further on, we will analyze vaccine rates and their effects on cases and deaths. In our project we ask "What are the global case and death rates compared to the US rate and what factors could be influencing those differences and similarities?" After analysis of the data, we will summarize and give a conclusion for our finding. 
+
+## Import Data and Initial Look
+
+First we need to import the data sets. We will import case and death data from the John Hopkins Github site. Then, we import US/global vaccine data from "Our World in Data" Github site, which will be used later on in the analysis and models. 
+
+```{r importing data, results='hide'}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+filenames <- c("time_series_covid19_confirmed_US.csv", 
+               "time_series_covid19_confirmed_global.csv",
+               "time_series_covid19_deaths_US.csv",
+               "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in, filenames)
+US_cases <- read_csv(urls[1])
+global_cases <- read_csv(urls[2])
+US_deaths <- read_csv(urls[3])
+global_deaths <- read_csv(urls[4])
+
+US_vacs <- read_csv('https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv')
+global_vacs <- read_csv('https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/vaccinations.csv')
+
+global_pop <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv')
+```
+
+Now that we have imported the data, we will take a preliminary look at what we have and what we will be looking at. This will help us identify what data is missing and what could be useful. We can also have a better understanding of the data sets to know how to organize, visualize, and later analyze it all. 
+
+```{r inital look at data}
+head(global_cases)
+```
+
+As we can see with the top first rows of data and the summary, we have many columns of data. We can see for global, we have these columns: Province/State, Country/Region, Lat, Long, and then hundreds of date input columns. We will repeat the process for all the data sets and make sure they are the same setup. Since there are so many date columns, I found it easier just to look at the head() of each data set for now. 
+
+```{r inital look at the rest of the data, echo=FALSE}
+head(global_deaths)
+head(US_cases)
+head(US_deaths)
+```
+
+By looking at these data sets, we get a pretty good idea of what we will do to clean and tidy the data. For each state and country we have the number of cases and deaths, dates, and some extra information which we will not use. We also notice for US data, we have the population. 
+
+## Clean Data and Tidy
+
+First, we will make it easier to work with my rotating the columns down to rows, making each row a different date per state or country. 
+
+```{r Tidying Global Data, results='hide'}
+global_cases <- global_cases %>% 
+  pivot_longer(cols = -c('Province/State','Country/Region', Lat, Long),
+               names_to='date', values_to='cases') %>%
+  select(-c(Lat, Long))
+
+global_deaths <- global_deaths %>% 
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), 
+               names_to='date', values_to='deaths') %>% 
+  select(-c(Lat, Long))
+
+global_cases_deaths <- global_cases %>% 
+  full_join(global_deaths) %>% rename(Country_Region = 'Country/Region',Province_State='Province/State') %>%
+  mutate(date=mdy(date))
+```
+
+After looking at the summary, we notice we have many rows with no cases, let's filter out those rows. We also want to know if the max numbers could be a typo or true data. By looking at the max numbers, dates and locations, we can see it looks about right, so we will leave that for now. 
+
+```{r filtering global data, results='hide'}
+global_cases_deaths <- global_cases_deaths %>% filter(cases>0) 
+global_cases_deaths %>% filter(cases >28000000)
+```
+
+We will now repeat this process for the USA data sets. We notice there are many columns we don't need for our analysis. Let's delete those columns and tidy it up. Finally, we will have a look at our summary of data. 
+
+```{r Tidying USA Data, results='hide'}
+US_cases <- US_cases %>% pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date", 
+               values_to = "cases")
+
+US_cases[c('UID', 'iso2', 'iso3', 'code3', 'FIPS')] <- NULL
+
+US_cases <- US_cases %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>% 
+  pivot_longer(cols = -(UID:Population), 
+               names_to = "date", values_to = "deaths") %>% 
+  select(Admin2:deaths) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+US_cases_deaths <- US_cases %>% full_join(US_deaths)
+summary(US_cases_deaths)
+```
+
+We notice that the US has two extra columns than the global data. These are the "Combined_Key" and "Population." To be able to to more accurately compare the two data sets, countries and states, we will need to use population and have the data sets with the same columns. For population, we put the csv file above with the other import files to keep it organized. Below, we will now add the population data to the global data. 
+
+```{r population and combining, results='hide'}
+global_cases_deaths <- global_cases_deaths %>%
+  unite("Combined_Key", c(Province_State, Country_Region), sep = ", ", 
+        na.rm = TRUE, remove = FALSE)
+
+global_pop[c("UID", "iso2", "iso3", "code3", "FIPS", "Lat", "Long_", "Combined_Key", "Admin2")] <- NULL
+
+global_cases_deaths <- global_cases_deaths %>% 
+  left_join(global_pop, by = c("Province_State", "Country_Region"))
+```
+
+We have now completed tidying  the cases and deaths data sets to the US and global, we will now clean and tidy the vaccine data sets. To start, we will delete columns we won't be using in this analysis. If you look at the vaccine data set on Github, it is recommended to use the daily_vaccinations column (instead of the daily_vaccinations_raw). We also will work with the full data. For example, the vaccination data has many columns with "per_hundred" or "per_million". Since we want to calculate our own rates with our data, we will also get rid of these. As well as booster data. Again, we are interested in the overall picture of the data trends; what happens to deaths and cases as more people are vaccinated? We will target this question in our analysis later. 
+
+```{r Vaccine data, results='hide'}
+global_vacs[c("iso_code", "total_boosters", "daily_vaccinations_raw",
+              "total_vaccinations_per_hundred", "people_vaccinated_per_hundred", 
+              "people_fully_vaccinated_per_hundred", "daily_vaccinations_per_million", 
+              "total_boosters_per_hundred")] <- NULL
+
+global_vacs <- global_vacs %>% rename(Country_Region = "location")
+
+global <- global_cases_deaths %>% 
+  left_join(global_vacs, by = c("Country_Region", "date"))
+
+US_vacs[c("total_distributed", "people_fully_vaccinated_per_hundred", 
+          "total_vaccinations_per_hundred", "people_vaccinated_per_hundred",
+          "distributed_per_hundred", "daily_vaccinations_raw", "daily_vaccinations_per_million",
+          "share_doses_used")] <- NULL
+
+US_vacs <- US_vacs %>% rename(Province_State = "location")
+
+US <- US_cases_deaths %>% 
+  left_join(US_vacs, by = c("Province_State", "date"))
+US <- US %>% rename(County = "Admin2")
+```
+
+All of our data should be combined into two tables, global and US. Each one should have cases, deaths, population and vaccine data. Let's take a look at each one. 
+
+```{r summary of combined data}
+summary(global)
+head(global)
+
+summary(US)
+head(US)
+```
+
+We notice there is a good number of NA's in the vaccine data. From outside knowledge, we know that the vaccine data was not recorded each day and/or there is limited availability to report data in some countries. In addition, we haven't had vaccines since day-one of the coronavirus outbreak (vaccines were created and then distributed almost a year after the first outbreak). Therefore, since global population is missing so few rows, we will delete these rows. Then for NA's in the vaccine data, we will populate them with zeros. 
+
+```{r Nas}
+global_clean <- global[!is.na(global$Population), ]
+
+global_clean <- mutate_at(global_clean, c("total_vaccinations", "people_vaccinated", 
+                               "people_fully_vaccinated", "daily_vaccinations"), 
+                          ~replace(., is.na(.), 0))
+summary(global_clean)
+
+US_clean <- mutate_at(US, c("total_vaccinations", "people_vaccinated", 
+                               "people_fully_vaccinated", "daily_vaccinations"), 
+                          ~replace(., is.na(.), 0))
+summary(US_clean)
+```
+
+Our data is looking much cleaner and seems ready to analyze. Let's visualuize the data and see how patterns look.
+
+## Analyze Data - Visualizations
+
+First let's take an overall look at the US data to see where we want to go with the data. First we will group by state then visualize it. 
+
+```{r US grouping, results="hide"}
+US_by_state <- US_clean %>% group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population), 
+            total_vacs = sum(total_vaccinations)) %>%
+  mutate(deaths_per_hundred = deaths*100/Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_hundred, Population, total_vacs) %>%
+  ungroup()
+
+US_totals <- US_by_state %>% group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population), 
+            total_vacs = sum(total_vacs)) %>%
+  mutate(deaths_per_hundred = deaths*100/Population) %>%
+  select(Country_Region, date, cases, deaths, total_vacs, deaths_per_hundred, Population) %>%
+  ungroup()
+```
+
+We can see that when we group the data by state, the cases, deaths and eventually vaccines increase. The same happens for grouping it by all of the US (therefore by looking at day-to-day data). But wait, shouldn't the cases and deaths fall as more vaccines are administered? We would hope so. But it is hard to tell exactly what the data is doing in table form. Therefore, we will visualize it with some graphs. We will first scale with log scale so that we get the trend and don't lose any detail.
+
+```{r US visualizationm, echo=FALSE}
+US_totals %>% filter(cases>0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x=element_text(angle=45)) + 
+  labs(title="COVID-19 Totals in USA", y=NULL)
+```
+As we can see, the cases and deaths had a sharp increase at the beginning then as time went on, the totals start to plateau suggesting that there was a quick increase of cases and deaths then a slower rate of cases and deaths, but still increasing.
+
+This is interesting but it doesn't tell us very much about state to state. To get a better idea, lets focus on just two states. Randomly choosing two states, we will look at Alabama and Washington. 
+
+```{r AL and WA, echo=FALSE}
+US_by_state %>% filter(Province_State == "Alabama") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Alabama"), y=NULL)
+
+US_by_state %>% filter(Province_State == "Washington") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Washington"), y=NULL)
+
+```
+
+
+This is interesting but also expected. Washington and Alabama both had covid cases start around the same time (as most states did). Therefore we would assume their graphs to look quite similar, which they do. Let's now look at specific data to see where peaks might be. 
+
+
+```{r look at maximum values}
+max(US_totals$date)
+max(US_totals$cases)
+max(US_totals$deaths)
+```
+
+The peaks also fall in line with our experience with coronavirus and the graphs. By looking at the graphs above, we might think the cases and deaths are more steady but maybe that is just the way we charted it. For this reason, we will return to our data, reorganize and transform it some more then visualize it again. 
+
+```{r transform and visualize US data, results='hide'}
+US_by_state <- US_by_state %>% 
+  mutate(new_cases=cases-lag(cases),new_deaths=deaths-lag(deaths))
+US_totals <- US_totals %>% 
+  mutate(new_cases=cases-lag(cases), new_deaths=deaths-lag(deaths))
+``` 
+
+First we will look at only the new cases and deaths per day for the US. That is, we will look at the change of cases and deaths as time passes. This will help us see a more accurate pattern of the data. 
+
+```{r visualize US transformed, echo=FALSE}
+US_totals %>% ggplot(aes(x=date, y=new_cases)) +
+  geom_line(aes(color="new_cases")) + 
+  geom_line(aes(y=new_deaths, color="new_deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("New Cases and Deaths Covid-19 in US"), y=NULL)
+
+US_by_state %>% filter(Province_State == "Alabama") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=new_cases)) + 
+  geom_line(aes(color="new_cases")) + 
+  geom_line(aes(y=new_deaths, color="new_deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("New Cases and Deaths Covid-19 in Alabama"), y=NULL)
+
+US_by_state %>% filter(Province_State == "Washington") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=new_cases)) + 
+  geom_line(aes(color="new_cases")) + 
+  geom_line(aes(y=new_deaths, color="new_deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("New Cases and Deaths Covid-19 in Washington"), y=NULL)
+```
+
+By looking at the overall US data, we see a similar trend of a quick start to the pandemic with rapid increase of cases and deaths, then as time passes people continue contract and die from covid, but just not at the extreme rates we saw at the beginning. Note also, these charts  have an oscillating feature. We can best describe this with reporting tactics and human nature. What is meant to say is, we must take into account that many countries only reported cases and deaths on one day of the week each week. In addition, humans often will wait until Monday to go to the hospital instead of the weekend which could be contributing to the oscillating effect on the data. With such few data (cases and deaths only) further investigation would be needed to pin-point this exactly. We will discuss further in the conclusion and biases section.
+
+Let's dive a bit deeper into our analysis. We will transform the data again to see the max numbers.
+
+```{r max filter transform, echo=FALSE}
+US_state_totals <- US_by_state %>% 
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases = max(cases), population = max(Population), 
+            cases_per_thous = 1000*cases/population, deaths_per_thous = 1000*deaths/population) %>%
+  filter(cases>0, population>0)
+
+#best case/deaths numbers
+US_state_totals %>% slice_min(deaths_per_thous, n=10) %>%
+  select(Province_State, deaths_per_thous, cases_per_thous, everything()) 
+
+#worst case/deaths/numbers
+US_state_totals %>% slice_max(deaths_per_thous, n=10) %>%
+  select(Province_State, deaths_per_thous, cases_per_thous, everything())
+```
+
+We really like what information we got so far from the US data. Since we want to compare it to the global data, let's transform the global data like we did with the US data. 
+
+```{r global grouping, echo=FALSE}
+global_by_country <- global_clean %>% group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population), 
+            total_vacs = sum(total_vaccinations)) %>%
+  mutate(deaths_per_thous = deaths*1000/Population, cases_per_thous = cases*1000/Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_thous, cases_per_thous,Population, total_vacs) %>%
+  ungroup()
+head(global_by_country)
+
+global_totals <- global_by_country %>% group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population), 
+            total_vacs = sum(total_vacs)) %>%
+  mutate(deaths_per_thous = deaths*1000/Population, cases_per_thous = cases*1000/Population) %>%
+  select(Country_Region, date, cases, deaths, total_vacs, deaths_per_thous, cases_per_thous, Population) %>%
+  ungroup()
+
+head(global_totals)
+```
+
+```{r Global visualization, echo=FALSE}
+global_totals %>% filter(cases>0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) +
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x=element_text(angle=45)) + 
+  labs(title="COVID-19 Totals Globally", y=NULL)
+```
+
+```{r Spain and Sweden, echo=FALSE}
+global_by_country %>% filter(Country_Region == "Spain") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Spain"), y=NULL)
+
+global_by_country %>% filter(Country_Region == "Sweden") %>%
+  filter(cases >0) %>% 
+  ggplot(aes(x=date, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Sweden"), y=NULL)
+```
+We notice there is not as prominent of an oscillating effect with the global data. Again, with the data sets that we are given and using, it is impossible to pin-point what is causing these trends. For our analysis we are just looking at the broad overall picture. With that said, we see that the cases globally and in two countries, Spain and Sweden, we notice a similar trend as in the US. We chose to look at Spain becasue at the start of the pandemic it was the epicenter of outbreak for many weeks. We wanted to see how their case and death trends compared. Also, we looked at Sweden because they did very little at the start of their pandemic such as no primary lock-down like which was done in Spain and other European countries. It is interesting to see that all graphs we charted show similar trends.
+
+## Analyze Data - Modeling
+
+Now lets do some modeling of the data. We will first look at the US model and global model and compare them. 
+
+In this study, we will use a linear model to compare two variables.  
+
+```{r first US model}
+deaths_cases_US_model <- lm(deaths_per_thous ~ cases_per_thous, data=US_state_totals)
+summary(deaths_cases_US_model)
+
+#best case/deaths numbers
+US_state_totals %>% slice_min(cases_per_thous, n=10) %>%
+  select(Province_State,  cases_per_thous, deaths_per_thous, everything()) 
+
+#worst case/deaths/numbers
+US_state_totals %>% slice_max(cases_per_thous, n=10) %>%
+  select(Province_State,  cases_per_thous, deaths_per_thous, everything())
+
+#make a new df with predictions and raw totals
+US_totals_predictions <- US_state_totals %>% mutate(deaths_pred = predict(deaths_cases_US_model))
+
+US_totals_predictions %>% ggplot() + 
+  geom_point(aes(x=cases_per_thous, y=deaths_per_thous), color="blue") + 
+  geom_point(aes(x=cases_per_thous, y=deaths_pred), color="red")
+```
+This is a great start. We can see that cases and deaths are strongly connected and most likely impact each other, as we can see in the model summary. This intuitively makes sense as well, more cases probably leads to more deaths. By looking at the model plot, we can see at the lower end (fewer cases) the model is quite good at guessing the number of deaths, however as the cases increase, the accuracy is not as close (but still pretty good mostly). This suggests there are probably other factors influencing the deaths more than just cases.
+
+Let's do this again with the global data.
+
+```{r first global model}
+deaths_cases_global_model <- lm(deaths_per_thous ~ cases_per_thous, data=global_totals)
+summary(deaths_cases_global_model)
+
+#best case/deaths numbers
+global_totals %>% slice_min(cases_per_thous, n=10) %>%
+  select(Country_Region, cases_per_thous, deaths_per_thous, everything()) 
+
+#worst case/deaths/numbers
+global_totals %>% slice_max(cases_per_thous, n=10) %>%
+  select(Country_Region, cases_per_thous, deaths_per_thous, everything())
+
+#make a new df with predictions and raw totals
+global_predictions <- global_totals %>% ungroup()
+global_predictions <- global_predictions %>% 
+  mutate(deaths_pred = predict(deaths_cases_global_model))
+
+global_predictions %>% ggplot() + 
+  geom_point(aes(x=cases_per_thous, y=deaths_per_thous), color="blue") + 
+  geom_point(aes(x=cases_per_thous, y=deaths_pred), color="red")
+```
+
+These two models are really interesting. Notice in both models, the US and global models, that the number of cases is highly predictive of the number of deaths (notice the three stars in the model summaries). However, we can see that the global model did much better at predicting deaths for lower number of cases while the US data seems, visually, not as accurate. Notice also that the global data has many different types of trends by country. Some are more steady while others have higer deaths rates. While slight, this is also the case if we look at the summaries again. We notice the p-values and square-errors are higher for the US data than the global data, suggesting lower predictability for the US data, noting again that it is a slight difference.
+
+These models, as well as the graphs we visualized earlier, lead us to further questions. For example, what could be causing a slowing down of cases and deaths? Is it weather or location, culturally related, country wealth, vaccines, or a combination of these and/or more? The truth is that with our data it is impossible to know. Therefore we will try to get closer to some reasoning by introducing new data. We have imported above vaccine data above to help us try to understand the data more. Since we knew we were probably going to analyze the vaccine data, we went ahead and tidied, cleaned and organized the vaccine data right along with the rest of our data. In our global_totals and US_totals data sets we already have our vaccine data ready to plot and model. Let's take a look first at what we're working with here. 
+
+```{r quick look at vaccine data, results='hide'}
+#global vaccine data 
+global_totals <- global_by_country %>% 
+  group_by(Country_Region) %>%
+  summarize(deaths = max(deaths), cases = max(cases), 
+            population = max(Population),
+            cases_per_thous = 1000*cases/population,
+            deaths_per_thous = 1000*deaths/population,
+            vacs_per_thous = 1000*total_vacs/population) %>% 
+  filter(cases>0, population>0, vacs_per_thous>0)
+
+#US vaccine data
+US_state_totals <- US_by_state %>% 
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases = max(cases), 
+            population = max(Population), 
+            cases_per_thous = 1000*cases/population,
+            deaths_per_thous = 1000*deaths/population,
+            vacs_per_thous = 1000*total_vacs/population) %>% 
+  filter(cases>0, population>0)
+```
+
+```{r plot vaccine data, echo=FALSE}
+global_totals %>% 
+  filter(cases>0, cases<9000, vacs_per_thous>0) %>% 
+  ggplot(aes(x=vacs_per_thous, y=cases_per_thous)) + 
+  geom_line(aes(color="cases_per_thous")) + 
+  geom_line(aes(y=deaths_per_thous, color="deaths_per_thous")) + 
+  scale_y_log10() +
+  theme(legend.position="bottom", axis.text.x=element_text(angle=45)) +
+  labs(title="COVID-19 Totals Globally", y=NULL)
+
+global_by_country %>% filter(Country_Region == "Spain") %>%
+  filter(cases>0, total_vacs>0) %>% 
+  ggplot(aes(x=total_vacs, y=cases)) + 
+  geom_line(aes(color="cases")) + 
+  geom_line(aes(y=deaths, color="deaths")) +
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Spain"), y=NULL)
+
+global_by_country %>% filter(Country_Region == "Sweden") %>%
+  filter(cases>0, total_vacs>0) %>% 
+  ggplot(aes(x=total_vacs, y=cases)) + 
+  geom_line(aes(y=deaths, color="deaths")) + 
+  geom_line(aes(color="cases")) + 
+  theme(legend.position="bottom", axis.text.x = element_text(angle=45)) +
+  labs(title=str_c("Covid-19 in Sweden"), y=NULL)
+
+```
+
+First, we notice again that oscillating feature in the global data with regards to the vaccine rates, cases, and deaths. Notice this plot is different because we plotted the x-axis as the vaccine rate per thousand. We did this to see the change as vaccines when up, how did the cases and deaths fair. We would expect that the cases and, most importantly deaths, would curve and significantly slow down but we don't see a huge change with our data. There are many factors which could be impacting this. As we know, India had a huge increase in cases and deaths over the summer which definitely could have impacted the numbers. We also know that as weather is nicer, people like to go out more and mingle, leading to more cases and therefore deaths. Lastly, many countries lifted restrictions which could have lead to more cases and deaths, even as vaccines were increased. There are probably even more reasons which are beyond the scope of this analysis. 
+
+With regards to Spain and Sweden, we see that Spain actually had an increase of cases as more vaccines were administered, but the death rate stayed steady. This is promising, the vaccines were keeping people alive! Because I live in Spain, I know first hand that Spain has lifted almost all their restrictions which has allowed people to travel and interact more and therefore leading to more spread. However, the hospitals are not overwhelmed with patients and people aren't dying as often. For Sweden, we see a steady increase with not a significant change of cases or deaths. Again, this could be due to many outside factors which we will discuss later. 
+
+```{r vaccine models}
+deaths_vacs_global_model <- lm(deaths_per_thous ~ vacs_per_thous, data=global_totals)
+summary(deaths_vacs_global_model)
+
+cases_vacs_global_model <- lm(cases_per_thous ~ vacs_per_thous, data=global_totals)
+summary(cases_vacs_global_model)
+```
+By looking at the summary of the model, we see clearly that vaccines are connected to the cases and the number of deaths.
+
+We have so much to think about now. Let's discuss further in the conclusion below. 
+
+## Conclusions 
+
+For our conclusion, we can confidently say that deaths, cases, and vaccine rates are all strongly connected, which answers our primary question. We notice that as vaccine rates increases, deaths stayed steady. Case numbers fluctuated more. We conclude based on our study and on prior knowledge, that the coronavirus vaccines are helping to curve the death rates globally. 
+
+However, our report is incomplete because there must be more factors at play which should be analyzed further on. For example, we could look at mask wearing trends, country wealth, access to vaccines, access to medical help, transportation systems, vaccines bought and administered, weather trends, and so much more. We must also question how often the data was reported and if the reported data is trustworthy? Are the countries reporting their data accurately? Are cases/deaths/vaccines reported in the same way in each country? These are import questions which should be persued in further analysis.
+
+## Biases
+Prior to starting this report, I did have some biases which are important to identify now. I thought that the wealthier countries will have higher rates of vaccines because they can afford them. However, many countries have had a  high rate of people that refused to get vaccinated. Lower income countries might have lower rates of vaccines and/or higher rates of infection due to lack of vaccines and lack of medical records/access to medical assistance. Also, as someone from a medical family, I think vaccines are important and work. Therefore, I was hoping and expecting that vaccines would greatly decrease the rates of infection. While looking at the data, to try to prevent my biases from creeping in, I made sure to do multiple data analyzes. I also made sure to manipulate the data to look at it in multiple ways instead of just taking the first plot and moving on. Hopefully, this report is conclusive enough to get an idea of trends without incorporating biases into it. 
+
+
+## Appendix
+
+- Cases and deaths data from John Hopkins Github site to get the COVID-19 Data sets: https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series
+(https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/ was used as "url-in")
+
+- World and state vaccine data from Our World in Data on Github:  https://github.com/owid/covid-19-data/tree/master/public/data/vaccinations
+
+
+
