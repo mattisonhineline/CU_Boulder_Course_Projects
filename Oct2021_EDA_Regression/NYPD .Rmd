@@ -1,0 +1,268 @@
+This is a preliminary analysis of the historic shooting incident data from the NYC police department from 01/01/2006 to 31/12/2020. 
+
+
+---
+title: "NYPD Shooting"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NYPD Shooting Incident History
+
+The goal of this study is to find what factors could be contributing to shootings in New York. We will look at factors such as victim traits, location, day of the week, and time of day. We will then discuss other factors not seen in this data set and how those could be impacting our data as an outside influence. Finally, we will discuss the impact that those outside factors and biases have on studies.
+
+## Import Packages
+```{r packages, results=FALSE, message=FALSE}
+library(tidyverse)
+library(lubridate) #change data to date object
+library(ggplot2)   # to plot data
+library(mice)      # to visualize missing data
+library(dplyr)
+set.seed(550)      #set seed for consistency
+```
+
+## Import CSV files and view
+First we need to import the dataset as a csv file. The data can be found at: https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8. 
+
+```{r import, results=FALSE, message=FALSE}
+raw_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+Now let's look at the summary of the data so we get an idea of what we have to work with. 
+
+```{r view raw data}
+summary(raw_data)
+```
+We can see many different variables with different types. We will improve that later.
+
+Now let's look at the first few rows of data. This is another way to visualize the data before starting our cleaning and analysis.
+
+```{r head}
+head(raw_data)
+```
+
+## Cleaning and Transforming Data
+
+Now that we have an idea of what we are working with, first we want to find missing values and deal with them.   
+
+```{r missing data, echo=FALSE, message=FALSE, results=FALSE, message=FALSE, fig.show='hide'}
+shooting_data <- raw_data
+md.pattern(shooting_data)
+sum(is.na(shooting_data$JURISDICTION_CODE))
+sum(is.na(shooting_data$LOCATION_DESC))
+sum(is.na(shooting_data$PERP_AGE_GROUP))
+sum(is.na(shooting_data$PERP_SEX))
+sum(is.na(shooting_data$PERP_RACE))
+```
+We will use the 'mice' package to find the missing data quickly. After running each column in the console, we find that 5 columns have missing data. Now we must figure out how to deal with the missing data.
+
+1. JURISDICITION is only missing two rows so we will replace these values with the most common jurisdiction (either 0, 1, or 2). 
+2. LOCATION_DESC is missing the most values which is also almost 10% of the data. Therefore we will just delete this column as to not skew the data unnecessarily.
+3. PERP_AGE_GROUP, PERP_SEX and PERP_RACE are each missing more than 35% of the data. Therefore, we will also delete these columns too.
+4. The INCIDENT_KEY is not important for our analysis because it is just a way to number the incidents. This is important for police files but not for data analysis. So we delete that column too. 
+
+```{r deleting and replacing missing data, results=FALSE, message=FALSE}
+shooting_data$JURISDICTION_CODE[is.na(shooting_data$JURISDICTION_CODE)] <- names(which.max(table(shooting_data$JURISDICTION_CODE)))
+shooting_data$LOCATION_DESC <- NULL
+shooting_data$PERP_AGE_GROUP <- NULL
+shooting_data$PERP_RACE <- NULL
+shooting_data$PERP_SEX <- NULL
+shooting_data$INCIDENT_KEY <- NULL
+```
+
+Now we see that we have two different ways of identifying where the incident took place, by using either XY coordinates or Latitude-Longitude coordinates. Since we are most familiar with Lat-Long globally (most people do not know the XY coordinates for NYC), we will delete the X_COORD_CD and Y_COORD_CD.  
+
+```{r deleting columns, results=FALSE, message=FALSE}
+shooting_data$X_COORD_CD <- NULL
+shooting_data$Y_COORD_CD <- NULL
+```
+
+We want to change the column names to make it easier for us to read and use. Then, let's have one more look at the data before we start to visualize and analyze it.
+
+```{r summary}
+shooting_data <- rename(shooting_data, Dates=OCCUR_DATE, Time=OCCUR_TIME, Locality=BORO, Precinct=PRECINCT, Jur.Code=JURISDICTION_CODE, Stat.Flag=STATISTICAL_MURDER_FLAG, Victim.Age=VIC_AGE_GROUP, Victim.Sex=VIC_SEX, Victim.Race=VIC_RACE, Lat=Latitude, Long=Longitude, Lon_Lat=Lon_Lat)
+summary(shooting_data)
+```
+
+## Visualization and Analysis
+
+First we will look at the most active localities (boroughs/locations) in NYC.
+
+```{r plots, echo=FALSE, fig.width=5, fig.height=4}
+G <- ggplot(shooting_data, aes(x=Locality)) + geom_bar(fill='dodgerblue4') + labs(title="Localities of NYC", x="Locality Name", y="Count of Incidents") + theme_bw()
+G
+```
+
+Here we can see that Brooklynn is has the most incidents, then the Bronx. Manhatten, Queens and Staten Island have significantly fewer incidents. 
+
+Now let's look at the incidents by day and time. 
+
+```{r plots2, echo=FALSE, fig.width=5, fig.height=4}
+shooting_data$Dates <- mdy(shooting_data$Dates)
+shooting_data$Dates <- wday(shooting_data$Dates, label=TRUE)
+shootings1 <- shooting_data %>% group_by(Dates) %>% count()
+shootings2 <- shooting_data %>% group_by(Time) %>% count()
+
+Q <- ggplot(shootings1, aes(x=Dates, y=n)) + geom_col(fill='dodgerblue4') + labs(title="Incidents by Day", x="Day", y="Number of Incidents") + theme_bw()
+Q
+
+R <- ggplot(shootings2, aes(x=Time, y=n)) + geom_point(color = "tomato3") + labs(title="Incidents by Time", x="Time", y="Number of Incidents")+geom_smooth(color='dodgerblue4')+theme_bw()
+R
+```
+
+We can see that the middle of the week (Tuesday, Wednesday, Thursday) are safer days because of fewer incidents of gun violence. Saturday and Sunday are the most dangerous. 
+
+By looking at the times of incidents, we can see that mornings (around 9:00am) are the safest. We notice that there are more extreme values during at night but we can contrast that with the best-fit curve line which shows that the incidents on average don't vary that much. Therefore, we can say that mid-morning is safest and night is more dangerous.
+
+By looking at the prior plots, we start to question if there are patterns between these three variables. Therefore, we can plot all three on a facet grid to get a better idea of their relationship. 
+
+```{r facet grid, echo=FALSE, fig.width=8, fig.height=6}
+S <- ggplot(shooting_data) + 
+  geom_histogram(aes(x=Time, fill=Dates), bins=80) + 
+  facet_grid(Locality~ Dates) + 
+  labs(title="Daily Incidents by Time and Locality", x= "Time", y="Number of Incidents") +
+  theme(axis.ticks = element_blank(), axis.text.x = element_text(angle=90)) 
+S
+```
+
+In the plot, we can see that the Bronx and Brooklynn have the highest number of incidents early on Saturday and Sunday mornings/nighttime. We can begin to question as to why these could be occurring and how connected these variables are. For this, we will run some models to find correlations.
+
+We also want to see if race, age or gender of the victim affects the incident level. 
+
+```{r echo = FALSE, fig.width=5, fig.height=4}
+P <- shooting_data %>%
+  mutate(hour = ifelse(hour(Time) > 12, hour(Time), hour(Time))) %>% group_by(hour, Victim.Race) %>%
+  ggplot(aes(x = hour, y = Victim.Race)) +
+  geom_boxplot(aes(fill = Victim.Race), alpha = 0.55) +
+  xlab("Hour") +
+  ylab("Probability") +
+  ggtitle("Incidents by Victim Race and Hour") + theme_bw() +
+  theme(legend.position = "none")
+P
+```
+
+```{r echo = FALSE, fig.width=5, fig.height=4}
+U <- shooting_data %>%
+  mutate(hour = ifelse(hour(Time) > 12, hour(Time), hour(Time))) %>% group_by(hour, Victim.Age) %>%
+  ggplot(aes(x = hour, y = Victim.Age)) +
+  geom_boxplot(aes(fill = Victim.Age), alpha = 0.55) +
+  xlab("Hour") +
+  ylab("Probability") +
+  ggtitle("Incidents by Victim Age and Hour") + theme_bw() +
+  theme(legend.position = "none")
+U
+```
+
+```{r echo = FALSE, fig.width=5, fig.height=4}
+
+G <- shooting_data %>%
+  mutate(hour = ifelse(hour(Time) > 12, hour(Time), hour(Time))) %>% group_by(hour, Victim.Sex) %>%
+  ggplot(aes(x = hour, y = Victim.Sex)) +
+  geom_boxplot(aes(fill = Victim.Sex), alpha = 0.55) +
+  xlab("Hour") +
+  ylab("Probability") +
+  ggtitle("Incidents by Victim Gender and Hour") + theme_bw() +
+  theme(legend.position = "none")
+G
+```
+
+By looking at the plots, we can see that generally race and gender do not affect the number of incidents (note "U" is unknown gender). We also can see that 18- 64-year-olds are most targeted while 65+ are least targeted. 
+
+But lets also check the numbers separately for victim race, victim age, and victim sex by using "table()". 
+
+```{r victim data, echo=FALSE, fig.width=5, fig.height=4}
+age <- table(shooting_data$Victim.Age)
+sex <- table(shooting_data$Victim.Sex)
+race <- table(shooting_data$Victim.Race)
+print("***Grouped by Age***")
+print(age)
+print("***Grouped by Sex***")
+print(sex)
+print("***Grouped by Race***")
+print(race)
+```
+
+Just by looking at the numbers, we can see that the ages 18-44 are most targeted, that males are much more targeted than females, and that blacks out numbers the other races in this data set.
+
+## Modeling Data 
+
+First let's look at any relationships between the variables by running multiple linear regressions. We chose to use the following criteria in our regression: Dates (day of the week), Time (of day), Locality (location), victim age, victim sex, victim race. To run these variables as a multiple regression, we must set them to numerical data so that the algorithm can compute relationships. Then let's have a look at the summary and regression data head to make sure it looks okay. 
+
+```{r set variables to numerical, echo=FALSE}
+dates = sapply(shooting_data$Dates, unclass)
+time_of_day = sapply(shooting_data$Time, unclass)
+location = sapply(as.factor(shooting_data$Locality), unclass)
+vic_age = sapply(as.factor(shooting_data$Victim.Age), unclass)
+vic_sex = sapply(as.factor(shooting_data$Victim.Sex), unclass)
+vic_race = sapply(as.factor(shooting_data$Victim.Race), unclass)
+regression_df = data.frame(dates, time_of_day, location, vic_age, vic_race, vic_sex)
+summary(regression_df)
+head(regression_df)
+```
+
+Now we will run the multiple regression model. We set the target value to victim race because we want to see if is correlated to any other variables. 
+
+```{r mutliple regression  victim race}
+regressor1 = lm(formula=vic_race ~ . , data=regression_df)
+print("Summary with all variables")
+summary(regressor1)
+
+regressor2 = lm(formula=vic_race ~ location + vic_age + vic_sex, data=regression_df)
+print("Summary without data nor time")
+summary(regressor2)
+```
+
+We can see that date and time are not significant in this model which suggests they do not play an important role in affecting which race is targeted. Let's run again without date and time in this model. We can see that these variables are all highly statistically significant (p is close to 0). 
+
+Let's run another regression focusing on time of day. 
+
+``` {r regression on time}
+regressor3 = lm(formula=time_of_day ~ . , data=regression_df)
+summary(regressor3)
+```
+
+Running a regression on the time has high statistical significance with date, location and victim age, suggesting that these variables are closely related. 
+
+Lastly, let's run a regression with dates as the target. 
+
+```{r regression dates}
+regressor4 = lm(formula=dates ~ . , data=regression_df)
+summary(regressor4)
+```
+
+We see that only time of day is very closed related to the date. Knowing this, let's remove location and victim race from the regression and see how the relationships change. We can see that time of day is closely relate. However, victim age and victim sex are connected, but to a less extent. 
+
+From these analysis, we are given the following information to decipher:
+  - Victim race is highly connected to location, victim age, and victim sex.
+  - Time of day is highly connected to date, location, and victim age
+  - Date is highly connected to time of day, and less so (but still significantly) with victim age and victim sex.
+  
+##Conclusions
+
+Based on the information we are given, we can conclude that location (borough/locality), day of the week, and time of day are very influential to the number of gun shooting incidents. We further conclude that the victim age, race, and sex may be targeted as well. 
+
+By looking at the relationships through the regression models and by looking at the numbers for targeted victims, we can confidently say that the following would be the most dangerous situation would be to be a black male, aged 18 to 44, in the Bronx or Brooklynn at nighttime hours Friday-Sunday. On the contrary, the safest situation would be an 65+ year old female American Indian/Alaskan Native on Staten Island between Tuesday and Wednesday in the daylight morning hours. However, more analysis is needed to make concrete conclusions.
+
+We must also be aware that other, outside variables could influence our dataset. For example: (1) Are there known gangs in the more active areas? (2) Do poverty levels affect the the number of incidents? (3) What is the rate of school graduation or attendance? (4) Are gun sales connected to neighborhood, incidents, gender, race, etc? (5) many other questions to answer as well. To find these answers, we would need to find relevant data online, import that data and run more analysis to find any connections.
+
+## Bias and Ethics 
+
+When doing any analysis, we will have biases with ourselves, the data and the algorithms. We must try our hardest not to assume anything and work through the process without our personal opinions. 
+
+In my personal case, I have mixed feeling about the gun laws in the United States which may have influenced how I handled the data. To help prevent my personal biases, I compared much of the data with different parts to get the whole picture. In addition, from watching TV shows and movies, we always hear about gangs in LA and NYC. Compton is famous for gang violence, while in NYC the Bronx is famous for gang violence. To deter any prior biases we may have while working with new data sets, it is imperative to ensure a full analysis without making any assumptions. In addition, once the data is analyzed, we can return and rerun analysis to ensure few biases have appeared. Also, by adding more outside data, such as the suggestions above, can help as well.
+
+In this dataset, we chose to remove the missing variables because there were so many (perp race, perp age, perp sex). However, a different analysis could have, instead, replaced these missing variables with the most common value or mean value. Doing so would have resulted in much different algorithms and analysis, potentially skewing the data as well. 
+
+Another important part of biases is outliers. Outliers are sometimes seen as just that, an outlier, something that is not normal and should usually be disregarded. However, a good analysis would try to understand the underlying cause of those outliers. For example, in our analysis, we have many outliers (high incident numbers away from the average) if we just look at time vs. incidents. Upon further investigation, we can suggest that those values are from the Bronx or Brooklynn areas. Therefore, we can begin to question is it the time, the location, or another outside factor that is increasing shootings at those times? Further data and analysis would be needed to determine this.
+
+Lastly, machine learning algorithms themselves cause biases when running. When we do linear regressions or train-test models, we are allowing the computer to make decisions which will always have some bias. Every machine learning algorithm has a diffferent algorithm to learn, different rules to learn by. By insuring our data is clean, has sufficient information and is handled correctly before testing, we can assure ourselves that it is as least biased as possible. In addition, after running a regression and model, we should look at the results to make sure they make sense and do further tests if needed. 
+
+## Appendix
+- Data was collected from opendata.cityofnewyork.us with the specific csv file downloadable from 
+https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD 
+
+- Further data should be found online and downloaded. A good way to find more data is to simply Google and use reputatal sites. Sites to begin your search are: Google Dataset Search, Kaggle, Data.gov, Datahub.io, Earth Data, CERN Open Data Portal, and even github. 
